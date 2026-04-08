@@ -20,7 +20,7 @@ class Settings:
 
     # This service
     HOST: str = os.getenv("DEVIATION_ENGINE_HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("DEVIATION_ENGINE_PORT", "8100"))
+    PORT: int = int(os.getenv("PORT", os.getenv("DEVIATION_ENGINE_PORT", "8100")))
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
 
     # Timing defaults (seconds)

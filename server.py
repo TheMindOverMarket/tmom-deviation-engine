@@ -155,4 +155,9 @@ async def deviation_output_ws(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host=settings.HOST, port=settings.PORT, reload=True)
+    uvicorn.run(
+        "server:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.ENVIRONMENT == "development",
+    )
