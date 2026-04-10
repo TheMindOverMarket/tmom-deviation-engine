@@ -39,5 +39,14 @@ class Settings:
             return f"ws://{url[len('http://'):]}"
         return url
 
+    @property
+    def rule_engine_ws_url(self) -> str:
+        url = self.RULE_ENGINE_BASE_URL
+        if url.startswith("https://"):
+            return f"wss://{url[len('https://'):]}"
+        if url.startswith("http://"):
+            return f"ws://{url[len('http://'):]}"
+        return url
+
 
 settings = Settings()

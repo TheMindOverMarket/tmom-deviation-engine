@@ -1,8 +1,8 @@
 """
 Deviation Engine — WebSocket Stream Clients
 
-Subscribes to the backend's WebSocket streams (same pattern as Abhinav's
-Rule-Engine/execution_engine.py). Three stream consumers:
+Subscribes to the backend's market/activity streams plus the Rule Engine's
+engine-output stream. Three stream consumers:
 
 1. Market State   → feeds the MarketAdapter with canonical pricing
 2. User Activity  → processes fills through the deviation engine
@@ -117,9 +117,26 @@ async def _user_activity_handler(msg: str):
             price = float(price)
         order_id = data.get("order_id", "")
         timestamp_ms = data.get("timestamp_server", time.time() * 1000)
+        session_id = data.get("session_id")
+        user_id = data.get("user_id")
 
-        # Process through each active engine
-        for session_id, engine in DeviationEngineRegistry.get_all().items():
+        # Only process activity that can be scoped to a specific session or user.
+        target_engines: list[tuple[str, Any]] = []
+        if session_id:
+            engine = DeviationEngineRegistry.get(session_id)
+            if engine:
+                target_engines.append((session_id, engine))
+        elif user_id:
+            target_engines.extend(
+                (active_session_id, engine)
+                for active_session_id, engine in DeviationEngineRegistry.get_all().items()
+                if engine.user_id == user_id
+            )
+        else:
+            logger.warning("[ACTIVITY_STREAM] Skipping unscoped activity event without session_id/user_id.")
+            return
+
+        for target_session_id, engine in target_engines:
             result = engine.process_decision(
                 symbol=symbol, side=side, qty=qty, filled_qty=filled_qty,
                 price=price, order_id=order_id, timestamp_ms=timestamp_ms,
@@ -128,13 +145,13 @@ async def _user_activity_handler(msg: str):
             # Persist deviation events to backend
             if result and result.get("deviations"):
                 for dev in result["deviations"]:
-                    await backend_client.persist_deviation_event(session_id, dev)
+                    await backend_client.persist_deviation_event(target_session_id, dev)
 
             # Broadcast result via our own output registry
             from server import deviation_output_registry
             await deviation_output_registry.broadcast(
-                {"type": "deviation_result", "session_id": session_id, "data": result},
-                session_id=session_id,
+                {"type": "deviation_result", "session_id": target_session_id, "data": result},
+                session_id=target_session_id,
             )
 
     except json.JSONDecodeError:
@@ -209,8 +226,8 @@ async def _engine_output_handler(msg: str):
 
 
 async def start_engine_output_stream(session_id: Optional[str] = None, user_id: Optional[str] = None):
-    """Subscribe to the backend's engine-output WebSocket."""
-    url = f"{settings.backend_ws_url}/ws/engine-output"
+    """Subscribe to the Rule Engine's engine-output WebSocket."""
+    url = f"{settings.rule_engine_ws_url}/ws/engine-output"
     params = []
     if session_id:
         params.append(f"session_id={session_id}")
