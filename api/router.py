@@ -9,9 +9,54 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 import time
+import re
 from deviation.engine import DeviationEngineRegistry
 
 router = APIRouter(prefix="/deviations", tags=["deviations"])
+
+
+def _coerce_positive_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _extract_expected_qty_from_playbook(playbook: Optional[Dict[str, Any]]) -> Optional[float]:
+    if not playbook:
+        return None
+
+    context = playbook.get("context") or {}
+    compiled_rules = context.get("compiled_rules") or []
+    quantity_fields = {"position_size", "qty", "quantity", "order_size", "size"}
+    equality_ops = {"==", "=", "eq"}
+
+    for rule in compiled_rules:
+        for extension in rule.get("extensions", []):
+            params = extension.get("params") or {}
+            left = str(params.get("left", "")).strip().lower()
+            op = str(params.get("op", "")).strip().lower()
+            if left in quantity_fields and op in equality_ops:
+                qty = _coerce_positive_float(params.get("right"))
+                if qty is not None:
+                    return qty
+
+    prompt_text = str(playbook.get("original_nl_input") or "")
+    patterns = (
+        r"\bexactly\s+([0-9]*\.?[0-9]+)\s*btc\b",
+        r"\bbuy\s+([0-9]*\.?[0-9]+)\s*btc\b",
+        r"\bposition size(?: is|:)?\s*([0-9]*\.?[0-9]+)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, prompt_text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        qty = _coerce_positive_float(match.group(1))
+        if qty is not None:
+            return qty
+
+    return None
 
 
 @router.get("/session/{session_id}/summary")
@@ -56,19 +101,30 @@ def list_active_engines() -> Dict[str, Any]:
 
 
 @router.post("/session/start")
-def start_session(session_id: str, playbook_id: str, user_id: str) -> Dict[str, Any]:
+async def start_session(session_id: str, playbook_id: str, user_id: str) -> Dict[str, Any]:
     """Manually start a deviation engine for a session (called by backend or testing)."""
     from clients.stream_clients import global_market_adapter
+    from clients.backend_client import BackendClient
 
     existing = DeviationEngineRegistry.get(session_id)
     if existing:
         return {"status": "already_running", "session_id": session_id}
 
+    backend_client = BackendClient()
+    playbook = await backend_client.get_playbook_info(playbook_id)
+    expected_qty = _extract_expected_qty_from_playbook(playbook)
+
     engine = DeviationEngineRegistry.create(
         session_id=session_id, playbook_id=playbook_id,
         user_id=user_id, market_adapter=global_market_adapter,
+        default_expected_qty=expected_qty,
     )
-    return {"status": "started", "session_id": session_id, "playbook_id": playbook_id}
+    return {
+        "status": "started",
+        "session_id": session_id,
+        "playbook_id": playbook_id,
+        "expected_qty": expected_qty,
+    }
 
 
 @router.post("/session/stop")
@@ -139,5 +195,4 @@ async def mock_trader_fill(data: MockTraderFill, session_id: str = "smoke-test")
     }, session_id=session_id)
     
     return {"status": "processed", "result": result}
-
 

@@ -30,11 +30,13 @@ class DeviationEngine:
         self, session_id: str, playbook_id: str, user_id: str,
         market_adapter: Optional[MarketAdapter] = None,
         session_policy: Optional[SessionPolicy] = None,
+        default_expected_qty: Optional[float] = None,
     ):
         self.session_id = session_id
         self.playbook_id = playbook_id
         self.user_id = user_id
         self.session_policy = session_policy or SessionPolicy()
+        self.default_expected_qty = default_expected_qty
 
         self._market_adapter = market_adapter or LiveMarketAdapter()
         self._price_resolver = PriceResolver(self._market_adapter)
@@ -66,6 +68,8 @@ class DeviationEngine:
         ts_ms = time.time() * 1000
         if canonical_price is None:
             canonical_price = self._price_resolver.resolve_canonical_price(symbol, ts_ms)
+        if expected_qty is None:
+            expected_qty = self.default_expected_qty
 
         action = CompliantAction(
             session_id=self.session_id, playbook_id=self.playbook_id,
@@ -213,9 +217,11 @@ class DeviationEngineRegistry:
 
     @classmethod
     def create(cls, session_id: str, playbook_id: str, user_id: str,
-               market_adapter: Optional[MarketAdapter] = None) -> DeviationEngine:
+               market_adapter: Optional[MarketAdapter] = None,
+               default_expected_qty: Optional[float] = None) -> DeviationEngine:
         engine = DeviationEngine(session_id=session_id, playbook_id=playbook_id,
-                                 user_id=user_id, market_adapter=market_adapter)
+                                 user_id=user_id, market_adapter=market_adapter,
+                                 default_expected_qty=default_expected_qty)
         cls._engines[session_id] = engine
         return engine
 

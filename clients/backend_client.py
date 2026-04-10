@@ -85,3 +85,16 @@ class BackendClient:
         except Exception as e:
             logger.error(f"[BACKEND_CLIENT] Error fetching session: {e}")
             return None
+
+    async def get_playbook_info(self, playbook_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch playbook metadata from the backend."""
+        url = f"{self.base_url}/playbooks/{playbook_id}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    return None
+        except Exception as e:
+            logger.error(f"[BACKEND_CLIENT] Error fetching playbook: {e}")
+            return None
