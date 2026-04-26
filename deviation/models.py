@@ -284,8 +284,8 @@ DEVIATION_FAMILY_MAP: Dict[DeviationType, DeviationFamily] = {
 
 COSTABILITY_MAP: Dict[DeviationType, Costability] = {
     DeviationType.INVALID_TRADE: Costability.FINAL_DEFERRED,
-    DeviationType.EARLY_ENTRY: Costability.FINAL_DEFERRED,
-    DeviationType.LATE_ENTRY: Costability.FINAL_DEFERRED,
+    DeviationType.EARLY_ENTRY: Costability.FINAL_IMMEDIATE,
+    DeviationType.LATE_ENTRY: Costability.FINAL_IMMEDIATE,
     DeviationType.MISSED_TRADE: Costability.NONE,
     DeviationType.OVERSIZE: Costability.FINAL_IMMEDIATE,
     DeviationType.UNDERSIZE: Costability.NONE,

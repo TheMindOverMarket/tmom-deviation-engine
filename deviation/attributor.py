@@ -43,6 +43,7 @@ class DeviationAttributor:
         self, match_result: MatchResult,
         position_context: Optional[Dict[str, Any]] = None,
     ) -> List[DeviationRecord]:
+        logger.info(f"[ATTRIBUTOR] Evaluating decision {match_result.decision.id[:8]} timing={match_result.timing_class}")
         deviations: List[DeviationRecord] = []
         decision = match_result.decision
         action = match_result.matched_action
@@ -54,8 +55,15 @@ class DeviationAttributor:
                 decision=decision, deviation_type=DeviationType.INVALID_TRADE,
                 ts=now_ms, action=action,
             )
+            dev.candidate_cost = 0.0 # Will be finalized on exit
+            dev.explainability_payload = {
+                "summary": {
+                    "matched_vs_expected": f"No compliant signal was active for {decision.side} {decision.symbol} at the time of trade execution."
+                }
+            }
+            logger.warning(f"[ATTRIBUTOR] Invalid trade detected: {decision.side} {decision.symbol} (Cost deferred to exit)")
             deviations.append(dev)
-            return deviations  # Hierarchy: stop here
+            return deviations
 
         # ─── Layer 2: TIMING ─────────────────────────────────────
         timing = match_result.timing_class
@@ -68,6 +76,13 @@ class DeviationAttributor:
             dev.canonical_price_actual = decision.price
             if dev.canonical_price_expected and dev.canonical_price_actual:
                 dev.price_delta = dev.canonical_price_actual - dev.canonical_price_expected
+                dev.candidate_cost = decision.filled_qty * abs(dev.price_delta)
+                
+            dev.explainability_payload = {
+                "summary": {
+                    "matched_vs_expected": f"Trade was executed BEFORE the rule trigger conditions were fully satisfied."
+                }
+            }
             deviations.append(dev)
             return deviations
 
@@ -80,6 +95,13 @@ class DeviationAttributor:
             dev.canonical_price_actual = decision.price
             if dev.canonical_price_expected and dev.canonical_price_actual:
                 dev.price_delta = dev.canonical_price_actual - dev.canonical_price_expected
+                dev.candidate_cost = decision.filled_qty * abs(dev.price_delta)
+            
+            dev.explainability_payload = {
+                "summary": {
+                    "matched_vs_expected": f"Trade was executed too long after the rule trigger expired (Slippage: {dev.price_delta if dev.price_delta else 'N/A'})."
+                }
+            }
             deviations.append(dev)
             return deviations
 
@@ -87,7 +109,7 @@ class DeviationAttributor:
         # ─── Layer 3: SIZE ────────────────────────────────────────
         if action and action.expected_qty and decision.filled_qty:
             ratio = decision.filled_qty / action.expected_qty
-            if ratio > 1.15:
+            if ratio > 1.05:
                 dev = self._create_record(
                     decision=decision, deviation_type=DeviationType.OVERSIZE,
                     ts=now_ms, action=action,
@@ -95,13 +117,24 @@ class DeviationAttributor:
                 excess_qty = decision.filled_qty - action.expected_qty
                 if decision.price and action.canonical_price_at_creation:
                     dev.candidate_cost = excess_qty * abs(decision.price - action.canonical_price_at_creation)
+                
+                dev.explainability_payload = {
+                    "summary": {
+                        "matched_vs_expected": f"Position size ({decision.filled_qty}) exceeded expected size ({action.expected_qty}) by {((ratio-1)*100):.1f}%."
+                    }
+                }
                 deviations.append(dev)
                 return deviations
-            elif ratio < 0.85:
+            elif ratio < 0.95:
                 dev = self._create_record(
                     decision=decision, deviation_type=DeviationType.UNDERSIZE,
                     ts=now_ms, action=action,
                 )
+                dev.explainability_payload = {
+                    "summary": {
+                        "matched_vs_expected": f"Position size ({decision.filled_qty}) was smaller than expected ({action.expected_qty}) by {((1-ratio)*100):.1f}%."
+                    }
+                }
                 deviations.append(dev)
 
         # ─── Layer 4: RISK/PROCESS ────────────────────────────────
