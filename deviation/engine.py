@@ -47,11 +47,8 @@ class DeviationEngine:
         self._finalization = FinalizationWorker()
         self._explainability = ExplainabilityBuilder()
 
-        self._deviation_records: List[DeviationRecord] = []
-        self._decision_events: List[DecisionEvent] = []
-        self._total_deviation_cost: float = 0.0
-        self._total_unauthorized_gain: float = 0.0
         self._trade_count: int = 0
+        self._pending_reasoning: Dict[str, str] = {}  # order_id -> reasoning buffer
 
         logger.info(f"[ENGINE] Init session={session_id[:8]} playbook={playbook_id[:8]}")
 
@@ -111,6 +108,13 @@ class DeviationEngine:
         self._decision_events.append(decision)
         self._trade_count += 1
 
+        # 1.5 Check reasoning buffer for late-arriving trade
+        if order_id in self._pending_reasoning:
+            reasoning = self._pending_reasoning.pop(order_id)
+            # This will be applied to deviations found in step 3 below
+            # We store it temporarily in the decision object for easier attribution
+            decision.ai_reasoning_buffer = reasoning
+
         # 2. Match
         match_result = self._matcher.match(decision)
 
@@ -119,6 +123,9 @@ class DeviationEngine:
 
         # 4. Explainability + cost accounting
         for dev in deviations:
+            if hasattr(decision, 'ai_reasoning_buffer'):
+                dev.ai_reasoning = getattr(decision, 'ai_reasoning_buffer')
+
             self._explainability.build(record=dev, decision=decision, action=match_result.matched_action)
             if dev.costability == Costability.FINAL_DEFERRED:
                 self._finalization.register_pending(dev)
@@ -176,7 +183,11 @@ class DeviationEngine:
         matching_decision_ids = [d.id for d in self._decision_events if d.order_id == order_id]
         
         if not matching_decision_ids:
-            return False
+            # Race Condition: AI reasoning arrived BEFORE the Alpaca trade fill.
+            # Buffer it so process_decision can pick it up.
+            self._pending_reasoning[order_id] = reasoning
+            logger.info(f"[ENGINE] Buffered early reasoning for session {self.session_id[:8]} (Order: {order_id})")
+            return True
             
         for dev in self._deviation_records:
             if dev.decision_id in matching_decision_ids:

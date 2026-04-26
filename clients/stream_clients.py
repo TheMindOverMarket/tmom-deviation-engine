@@ -232,7 +232,14 @@ async def _engine_output_handler(msg: str):
                 
                 from server import deviation_output_registry
                 await deviation_output_registry.broadcast(
-                    {"type": "deviation_result", "session_id": session_id, "data": {"deviations": updated_records}},
+                    {
+                        "type": "deviation_result", 
+                        "session_id": session_id, 
+                        "data": {
+                            "deviations": updated_records,
+                            "session_totals": engine.get_session_summary()
+                        }
+                    },
                     session_id=session_id,
                 )
 
