@@ -166,6 +166,26 @@ class DeviationEngine:
             },
         }
 
+    def update_deviation_reasoning(self, order_id: str, reasoning: str) -> bool:
+        """
+        Updates the AI reasoning for deviation records associated with a specific order.
+        This is called when the Rule Engine finishes generating its explanation.
+        """
+        updated = False
+        # Find decisions matching this order_id
+        matching_decision_ids = [d.id for d in self._decision_events if d.order_id == order_id]
+        
+        if not matching_decision_ids:
+            return False
+            
+        for dev in self._deviation_records:
+            if dev.decision_id in matching_decision_ids:
+                dev.ai_reasoning = reasoning
+                updated = True
+                logger.info(f"[ENGINE] Updated reasoning for deviation in session {self.session_id[:8]} (Order: {order_id})")
+        
+        return updated
+
     def check_expired_actions(self) -> List[CompliantAction]:
         ts_ms = time.time() * 1000
         missed = []

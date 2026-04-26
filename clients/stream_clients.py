@@ -219,6 +219,23 @@ async def _engine_output_handler(msg: str):
             rule_evaluation_snapshot=data.get("rule_evaluations"),
         )
 
+        # 🚀 REASONING UPDATE 🚀
+        # If the Rule Engine sends a deviation signal with reasoning, capture it.
+        deviation = data.get("deviation", False)
+        ai_reasoning = data.get("ai_reasoning")
+        order_id = data.get("order_id")
+
+        if deviation and order_id and ai_reasoning:
+            if engine.update_deviation_reasoning(order_id, ai_reasoning):
+                # Re-broadcast updated records to frontend for real-time swap
+                updated_records = [d.to_dict() for d in engine._deviation_records if d.decision_id in [dec.id for dec in engine._decision_events if dec.order_id == order_id]]
+                
+                from server import deviation_output_registry
+                await deviation_output_registry.broadcast(
+                    {"type": "deviation_result", "session_id": session_id, "data": {"deviations": updated_records}},
+                    session_id=session_id,
+                )
+
     except json.JSONDecodeError:
         pass
     except Exception as e:

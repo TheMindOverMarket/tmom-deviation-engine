@@ -200,6 +200,7 @@ class DeviationRecord:
     size_snapshot: Optional[SizeSnapshot] = None
     detected_at: float = 0.0
     finalized_at: Optional[float] = None
+    ai_reasoning: Optional[str] = None
     explainability_payload: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -211,6 +212,7 @@ class DeviationRecord:
             "candidate_cost": self.candidate_cost, "finalized_cost": self.finalized_cost,
             "unauthorized_gain": self.unauthorized_gain, "price_delta": self.price_delta,
             "detected_at": self.detected_at, "finalized_at": self.finalized_at,
+            "ai_reasoning": self.ai_reasoning,
             "explainability_payload": self.explainability_payload,
         }
 
