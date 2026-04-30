@@ -43,6 +43,51 @@ python server.py
 
 The server starts on `http://localhost:8100` and automatically connects to the backend's WebSocket streams.
 
+## Automated Trade Test Runner (Test Branch)
+
+Use this to execute a scripted order list and capture deviation outputs automatically.
+
+### Files
+
+- `scripts/run_trade_test_plan.py`
+- `scripts/orders.template.json`
+
+### Wiring
+
+1. Start backend and deviation engine services.
+2. Copy `scripts/orders.template.json` and edit order steps.
+3. Run in **mock mode** first (safe path through backend `/mock-trade`):
+
+```bash
+python scripts/run_trade_test_plan.py \
+  --orders-file scripts/orders.template.json \
+  --session-id <session_uuid> \
+  --playbook-id <playbook_uuid> \
+  --user-id <user_uuid> \
+  --deviation-url http://localhost:8100 \
+  --backend-url http://localhost:8000 \
+  --mode mock
+```
+
+4. Run in **paper mode** (backend `/trade`) only when intended:
+
+```bash
+ALLOW_PAPER_TRADES=true python scripts/run_trade_test_plan.py \
+  --orders-file scripts/orders.template.json \
+  --session-id <session_uuid> \
+  --playbook-id <playbook_uuid> \
+  --user-id <user_uuid> \
+  --deviation-url http://localhost:8100 \
+  --backend-url http://localhost:8000 \
+  --mode paper
+```
+
+The script writes a JSON report under `artifacts/` with per-step:
+- submitted order payload
+- trade endpoint response
+- changed deviation records
+- session totals (`total_deviation_cost`, `pending_finalization`, etc.)
+
 ## API Endpoints
 
 | Method | Path | Description |

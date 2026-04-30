@@ -1,0 +1,38 @@
+[
+  {
+    "test_id": "A1",
+    "notes": "Compliant baseline buy",
+    "wait_before_seconds": 0,
+    "order": {
+      "symbol": "BTC/USD",
+      "qty": "0.001",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "gtc"
+    }
+  },
+  {
+    "test_id": "A2",
+    "notes": "Oversize test",
+    "wait_before_seconds": 2,
+    "order": {
+      "symbol": "BTC/USD",
+      "qty": "0.0012",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "gtc"
+    }
+  },
+  {
+    "test_id": "A3",
+    "notes": "Undersize test",
+    "wait_before_seconds": 2,
+    "order": {
+      "symbol": "BTC/USD",
+      "qty": "0.0008",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "gtc"
+    }
+  }
+]
