@@ -47,6 +47,10 @@ class DeviationEngine:
         self._finalization = FinalizationWorker()
         self._explainability = ExplainabilityBuilder()
 
+        self._deviation_records: List[DeviationRecord] = []
+        self._decision_events: List[DecisionEvent] = []
+        self._total_deviation_cost: float = 0.0
+        self._total_unauthorized_gain: float = 0.0
         self._trade_count: int = 0
         self._pending_reasoning: Dict[str, str] = {}  # order_id -> reasoning buffer
 
@@ -129,7 +133,7 @@ class DeviationEngine:
             self._explainability.build(record=dev, decision=decision, action=match_result.matched_action)
             if dev.costability == Costability.FINAL_DEFERRED:
                 self._finalization.register_pending(dev)
-            if dev.costability == Costability.FINAL_IMMEDIATE and dev.candidate_cost:
+            if dev.costability == Costability.FINAL_IMMEDIATE and dev.candidate_cost is not None:
                 self._total_deviation_cost += dev.candidate_cost
         self._deviation_records.extend(deviations)
 
@@ -145,9 +149,9 @@ class DeviationEngine:
         if closed_slices:
             finalized_records = self._finalization.finalize(closed_slices)
             for rec in finalized_records:
-                if rec.finalized_cost:
+                if rec.finalized_cost is not None:
                     self._total_deviation_cost += rec.finalized_cost
-                if rec.unauthorized_gain:
+                if rec.unauthorized_gain is not None:
                     self._total_unauthorized_gain += rec.unauthorized_gain
 
         return {
