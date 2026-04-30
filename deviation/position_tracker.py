@@ -25,6 +25,7 @@ class ClosedSlice:
     qty: float = 0.0
     realized_pnl: float = 0.0
     is_excess: bool = False
+    remaining_qty_after: float = 0.0
 
 
 class PositionTracker:
@@ -68,6 +69,7 @@ class PositionTracker:
                     lot_id=lot.id, decision_id=lot.decision_id, symbol=sym,
                     side=lot.side, entry_price=lot.entry_price, exit_price=price,
                     qty=matched_qty, realized_pnl=pnl, is_excess=lot.is_excess,
+                    remaining_qty_after=lot.remaining_qty - matched_qty,
                 ))
                 lot.remaining_qty -= matched_qty
                 remaining_qty -= matched_qty

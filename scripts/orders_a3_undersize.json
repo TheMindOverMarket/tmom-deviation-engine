@@ -1,0 +1,16 @@
+[
+  {
+    "test_id": "A3_undersize",
+    "notes": "Expected UNDERSIZE if matched to compliant action",
+    "wait_before_seconds": 0,
+    "require_active_action": true,
+    "action_wait_timeout_seconds": 45,
+    "order": {
+      "symbol": "BTC/USD",
+      "qty": "0.0008",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "gtc"
+    }
+  }
+]

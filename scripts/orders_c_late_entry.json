@@ -1,0 +1,17 @@
+[
+  {
+    "test_id": "C1_late_entry",
+    "notes": "Anchor on active action and buy 65s after its activation",
+    "wait_before_seconds": 0,
+    "require_active_action": true,
+    "action_wait_timeout_seconds": 45,
+    "wait_after_action_activation_seconds": 65,
+    "order": {
+      "symbol": "BTC/USD",
+      "qty": "0.001",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "gtc"
+    }
+  }
+]

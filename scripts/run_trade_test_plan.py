@@ -13,12 +13,14 @@ import argparse
 import asyncio
 import json
 import os
+import ssl
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
+import certifi
 
 
 def _build_http_url(base: str, path: str) -> str:
@@ -91,6 +93,26 @@ async def _post_json(
         return json.loads(text)
 
 
+async def _wait_for_active_action(
+    session: aiohttp.ClientSession,
+    deviation_url: str,
+    session_id: str,
+    timeout_seconds: float,
+    poll_seconds: float = 1.0,
+) -> Tuple[bool, int, Optional[Dict[str, Any]]]:
+    deadline = time.time() + timeout_seconds
+    actions_url = _build_http_url(deviation_url, f"/deviations/session/{session_id}/actions")
+    checks = 0
+    while time.time() < deadline:
+        checks += 1
+        actions = await _get_json(session, actions_url)
+        for action in actions:
+            if action.get("lifecycle") == "ACTIVE":
+                return True, checks, action
+        await asyncio.sleep(poll_seconds)
+    return False, checks, None
+
+
 async def run(args: argparse.Namespace) -> Dict[str, Any]:
     if args.mode == "paper":
         if os.getenv("ALLOW_PAPER_TRADES", "").lower() != "true":
@@ -133,7 +155,9 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
     timeout = aiohttp.ClientTimeout(total=60)
-    async with aiohttp.ClientSession(timeout=timeout) as http:
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as http:
         if not args.skip_start:
             await _post_json(http, deviation_start_url, payload={})
 
@@ -145,6 +169,39 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
             wait_before = float(step.get("wait_before_seconds", 0))
             if wait_before > 0:
                 await asyncio.sleep(wait_before)
+
+            waited_for_action = None
+            selected_action = None
+            if step.get("require_active_action"):
+                found, checks, action = await _wait_for_active_action(
+                    http,
+                    args.deviation_url,
+                    args.session_id,
+                    timeout_seconds=float(step.get("action_wait_timeout_seconds", 30)),
+                )
+                selected_action = action
+                waited_for_action = {"required": True, "found": found, "checks": checks}
+                if action is not None:
+                    waited_for_action["action_id"] = action.get("id")
+                    waited_for_action["action_activated_at"] = action.get("activated_at")
+
+            # Optional deterministic timing anchor:
+            # place order at action.activated_at + N seconds.
+            if selected_action and step.get("wait_after_action_activation_seconds") is not None:
+                activated_at_ms = selected_action.get("activated_at")
+                if isinstance(activated_at_ms, (int, float)):
+                    target_epoch_s = (activated_at_ms / 1000.0) + float(
+                        step.get("wait_after_action_activation_seconds", 0)
+                    )
+                    sleep_for = max(0.0, target_epoch_s - time.time())
+                    if sleep_for > 0:
+                        await asyncio.sleep(sleep_for)
+                    if waited_for_action is None:
+                        waited_for_action = {}
+                    waited_for_action["anchored_wait_seconds"] = float(
+                        step.get("wait_after_action_activation_seconds", 0)
+                    )
+                    waited_for_action["anchored_sleep_applied"] = sleep_for
 
             order_payload = step["order"]
             placed_at = time.time()
@@ -165,6 +222,7 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
                     "order": order_payload,
                     "placed_at_epoch_s": placed_at,
                     "trade_response": trade_response,
+                    "waited_for_action": waited_for_action,
                     "changed_records": changed_records,
                     "session_totals": {
                         "total_deviation_cost": summary.get("total_deviation_cost"),

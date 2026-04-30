@@ -1,0 +1,16 @@
+[
+  {
+    "test_id": "A1_compliant_baseline",
+    "notes": "Expected compliant/no size deviation",
+    "wait_before_seconds": 0,
+    "require_active_action": true,
+    "action_wait_timeout_seconds": 45,
+    "order": {
+      "symbol": "BTC/USD",
+      "qty": "0.001",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "gtc"
+    }
+  }
+]

@@ -9,6 +9,7 @@ pattern used by the backend's _active_sessions.
 from __future__ import annotations
 import logging
 import time
+from copy import deepcopy
 from typing import Optional, Dict, Any, List
 from deviation.models import (
     CompliantAction, DecisionEvent, DeviationRecord,
@@ -53,6 +54,8 @@ class DeviationEngine:
         self._total_unauthorized_gain: float = 0.0
         self._trade_count: int = 0
         self._pending_reasoning: Dict[str, str] = {}  # order_id -> reasoning buffer
+        self._processed_order_qty: Dict[str, float] = {}
+        self._last_order_results: Dict[str, Dict[str, Any]] = {}
 
         logger.info(f"[ENGINE] Init session={session_id[:8]} playbook={playbook_id[:8]}")
 
@@ -97,12 +100,38 @@ class DeviationEngine:
         position_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         ts = timestamp_ms or (time.time() * 1000)
+        symbol = symbol.upper()
+        side = side.lower()
+        requested_qty = float(qty or 0.0)
+        observed_filled_qty = float(filled_qty or requested_qty)
+
+        # Alpaca can replay trade_update messages. Use cumulative filled qty
+        # as the idempotency key so duplicate events cannot double-count cost.
+        previous_filled_qty = self._processed_order_qty.get(order_id, 0.0) if order_id else 0.0
+        actual_qty = observed_filled_qty - previous_filled_qty
+        if order_id and actual_qty <= 1e-12:
+            prior_result = deepcopy(self._last_order_results.get(order_id, {}))
+            if prior_result:
+                prior_result["duplicate"] = True
+                return prior_result
+            return self._build_noop_result(
+                symbol=symbol, order_id=order_id, reason="duplicate_or_zero_quantity"
+            )
+
+        open_qty_before = self._position_tracker.get_position_qty(symbol)
+        open_side_before = self._position_tracker.get_position_side(symbol)
+        is_close_only = (
+            open_qty_before > 1e-12
+            and open_side_before is not None
+            and open_side_before.lower() != side
+            and actual_qty <= open_qty_before + 1e-12
+        )
 
         # 1. Create DecisionEvent
         quote = self._price_resolver.get_quote_snapshot(symbol, ts)
         decision = DecisionEvent(
             session_id=self.session_id, user_id=self.user_id,
-            symbol=symbol.upper(), side=side.lower(), qty=qty, filled_qty=filled_qty,
+            symbol=symbol, side=side, qty=requested_qty, filled_qty=actual_qty,
             price=price, order_id=order_id, timestamp_ms=ts,
             canonical_bid=quote.bid if quote else None,
             canonical_ask=quote.ask if quote else None,
@@ -120,10 +149,13 @@ class DeviationEngine:
             decision.ai_reasoning_buffer = reasoning
 
         # 2. Match
-        match_result = self._matcher.match(decision)
+        if is_close_only:
+            match_result = MatchResult(decision=decision, is_matched=True, timing_class="POSITION_CLOSE")
+        else:
+            match_result = self._matcher.match(decision)
 
         # 3. Attribute
-        deviations = self._attributor.attribute(match_result, position_context)
+        deviations = [] if is_close_only else self._attributor.attribute(match_result, position_context)
 
         # 4. Explainability + cost accounting
         for dev in deviations:
@@ -138,23 +170,23 @@ class DeviationEngine:
         self._deviation_records.extend(deviations)
 
         # 5. Position tracking
-        actual_qty = filled_qty or qty
         new_lots, closed_slices = self._position_tracker.process_fill(
-            decision_id=decision.id, symbol=symbol.upper(), side=side.lower(),
+            decision_id=decision.id, symbol=symbol, side=side,
             qty=actual_qty, price=price or 0.0, ts_ms=ts,
         )
 
         # 6. Finalize deferred
         finalized_records = []
         if closed_slices:
-            finalized_records = self._finalization.finalize(closed_slices)
-            for rec in finalized_records:
-                if rec.finalized_cost is not None:
-                    self._total_deviation_cost += rec.finalized_cost
-                if rec.unauthorized_gain is not None:
-                    self._total_unauthorized_gain += rec.unauthorized_gain
+            finalization_updates = self._finalization.finalize(closed_slices)
+            finalized_by_id = {}
+            for update in finalization_updates:
+                self._total_deviation_cost += update.cost_delta
+                self._total_unauthorized_gain += update.gain_delta
+                finalized_by_id[update.record.id] = update.record
+            finalized_records = list(finalized_by_id.values())
 
-        return {
+        result = {
             "decision": decision.to_dict(),
             "match": {
                 "is_matched": match_result.is_matched, "timing_class": match_result.timing_class,
@@ -166,6 +198,32 @@ class DeviationEngine:
             "position": {
                 "new_lots": [l.to_dict() for l in new_lots],
                 "closed_slices": len(closed_slices),
+                "open_position_qty": self._position_tracker.get_position_qty(symbol),
+            },
+            "session_totals": {
+                "total_deviation_cost": self._total_deviation_cost,
+                "total_unauthorized_gain": self._total_unauthorized_gain,
+                "trade_count": self._trade_count,
+                "deviation_count": len(self._deviation_records),
+                "pending_finalization": self._finalization.get_pending_count(),
+            },
+        }
+        if order_id:
+            self._processed_order_qty[order_id] = previous_filled_qty + actual_qty
+            self._last_order_results[order_id] = deepcopy(result)
+        return result
+
+    def _build_noop_result(self, symbol: str, order_id: str, reason: str) -> Dict[str, Any]:
+        return {
+            "duplicate": True,
+            "reason": reason,
+            "decision": {"session_id": self.session_id, "symbol": symbol, "order_id": order_id},
+            "match": {"is_matched": False, "timing_class": "NOOP", "matched_action_id": None, "time_delta_ms": None},
+            "deviations": [],
+            "finalized": [],
+            "position": {
+                "new_lots": [],
+                "closed_slices": 0,
                 "open_position_qty": self._position_tracker.get_position_qty(symbol),
             },
             "session_totals": {
@@ -238,7 +296,7 @@ class DeviationEngine:
     def _group_by_family(self) -> Dict[str, float]:
         g = {}
         for d in self._deviation_records:
-            cost = d.finalized_cost or d.candidate_cost or 0
+            cost = d.finalized_cost if d.finalized_cost is not None else (d.candidate_cost or 0)
             g[d.deviation_family.value] = g.get(d.deviation_family.value, 0) + cost
         return g
 
@@ -254,6 +312,10 @@ class DeviationEngineRegistry:
     def create(cls, session_id: str, playbook_id: str, user_id: str,
                market_adapter: Optional[MarketAdapter] = None,
                default_expected_qty: Optional[float] = None) -> DeviationEngine:
+        existing = cls._engines.get(session_id)
+        if existing:
+            logger.info(f"[ENGINE_REGISTRY] Reusing existing session={session_id[:8]}")
+            return existing
         engine = DeviationEngine(session_id=session_id, playbook_id=playbook_id,
                                  user_id=user_id, market_adapter=market_adapter,
                                  default_expected_qty=default_expected_qty)

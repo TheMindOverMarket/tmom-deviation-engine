@@ -6,6 +6,8 @@ Resolves deferred deviation costs when positions are closed.
 
 from __future__ import annotations
 import logging
+import time
+from dataclasses import dataclass
 from typing import List, Dict, Optional
 from deviation.models import DeviationRecord, DeviationType, Costability
 from deviation.position_tracker import ClosedSlice
@@ -13,7 +15,16 @@ from deviation.position_tracker import ClosedSlice
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class FinalizationUpdate:
+    record: DeviationRecord
+    cost_delta: float = 0.0
+    gain_delta: float = 0.0
+
+
 class FinalizationWorker:
+    EPSILON = 1e-12
+
     def __init__(self):
         self._pending: Dict[str, List[DeviationRecord]] = {}
 
@@ -25,24 +36,36 @@ class FinalizationWorker:
                 self._pending[record.decision_id] = []
             self._pending[record.decision_id].append(record)
 
-    def finalize(self, closed_slices: List[ClosedSlice]) -> List[DeviationRecord]:
-        finalized = []
+    def finalize(self, closed_slices: List[ClosedSlice]) -> List[FinalizationUpdate]:
+        updates: List[FinalizationUpdate] = []
         for slice in closed_slices:
             pending_records = self._pending.get(slice.decision_id, [])
+            remaining_records = []
             for record in pending_records:
-                if record.finalized_cost is not None:
-                    continue
-                finalized_cost = self._compute_cost(record, slice)
-                record.finalized_cost = finalized_cost
+                cost_delta = self._compute_cost(record, slice)
+                gain_delta = 0.0
                 if record.deviation_type == DeviationType.INVALID_TRADE:
                     if slice.realized_pnl > 0:
-                        record.unauthorized_gain = slice.realized_pnl
-                        record.finalized_cost = 0.0
+                        gain_delta = slice.realized_pnl
+                        cost_delta = 0.0
                     else:
-                        record.finalized_cost = abs(slice.realized_pnl)
-                        record.unauthorized_gain = 0.0
-                finalized.append(record)
-        return finalized
+                        cost_delta = abs(slice.realized_pnl)
+                        gain_delta = 0.0
+
+                record.finalized_cost = (record.finalized_cost or 0.0) + cost_delta
+                record.unauthorized_gain = (record.unauthorized_gain or 0.0) + gain_delta
+                updates.append(FinalizationUpdate(record=record, cost_delta=cost_delta, gain_delta=gain_delta))
+
+                if slice.remaining_qty_after <= self.EPSILON:
+                    record.finalized_at = time.time() * 1000
+                else:
+                    remaining_records.append(record)
+
+            if remaining_records:
+                self._pending[slice.decision_id] = remaining_records
+            else:
+                self._pending.pop(slice.decision_id, None)
+        return updates
 
     def _compute_cost(self, record: DeviationRecord, slice: ClosedSlice) -> float:
         if record.deviation_type in (DeviationType.EARLY_ENTRY, DeviationType.LATE_ENTRY):
@@ -55,8 +78,8 @@ class FinalizationWorker:
 
     def get_pending_count(self, decision_id: Optional[str] = None) -> int:
         if decision_id:
-            return len(self._pending.get(decision_id, []))
-        return sum(len(v) for v in self._pending.values())
+            return sum(1 for record in self._pending.get(decision_id, []) if record.finalized_at is None)
+        return sum(1 for records in self._pending.values() for record in records if record.finalized_at is None)
 
     def clear_decision(self, decision_id: str):
         self._pending.pop(decision_id, None)

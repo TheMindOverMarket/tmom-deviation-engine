@@ -30,6 +30,22 @@ global_market_adapter = LiveMarketAdapter()
 backend_client = BackendClient()
 
 
+def _extract_position_context(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pass risk/process context through when upstream provides it."""
+    context = data.get("position_context") or data.get("risk_context")
+    if isinstance(context, dict):
+        return context
+
+    keys = (
+        "cooldown_violated",
+        "pyramiding_violated",
+        "daily_loss_cap_breached",
+        "max_positions_breached",
+    )
+    extracted = {key: data[key] for key in keys if key in data}
+    return extracted or None
+
+
 # ─── Generic WS Listener ─────────────────────────────────────────────
 
 async def _ws_listener(
@@ -140,6 +156,8 @@ async def _user_activity_handler(msg: str):
             result = engine.process_decision(
                 symbol=symbol, side=side, qty=qty, filled_qty=filled_qty,
                 price=price, order_id=order_id, timestamp_ms=timestamp_ms,
+                market_attachment_state=data.get("market_attachment_state"),
+                position_context=_extract_position_context(data),
             )
 
             # Persist deviation events to backend

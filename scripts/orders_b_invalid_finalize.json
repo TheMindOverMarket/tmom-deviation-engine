@@ -1,0 +1,26 @@
+[
+  {
+    "test_id": "B1_invalid_buy",
+    "notes": "Expected INVALID_TRADE (deferred cost)",
+    "wait_before_seconds": 0,
+    "order": {
+      "symbol": "BTC/USD",
+      "qty": "0.001",
+      "side": "buy",
+      "type": "market",
+      "time_in_force": "gtc"
+    }
+  },
+  {
+    "test_id": "B2_close_invalid_lot",
+    "notes": "Expected finalization from realized PnL",
+    "wait_before_seconds": 2,
+    "order": {
+      "symbol": "BTC/USD",
+      "qty": "0.001",
+      "side": "sell",
+      "type": "market",
+      "time_in_force": "gtc"
+    }
+  }
+]
